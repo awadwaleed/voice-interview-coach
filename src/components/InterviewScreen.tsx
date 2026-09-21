@@ -42,36 +42,38 @@ export default function InterviewScreen({
       </p>
 
       <div className="mt-6 flex flex-col gap-4">
-        <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-          <span
-            className={`h-2.5 w-2.5 shrink-0 rounded-full ${
-              status === "active"
-                ? "bg-green-500"
-                : status === "requesting"
-                  ? "bg-yellow-500"
-                  : status === "denied" || status === "error"
-                    ? "bg-red-500"
-                    : "bg-black/20 dark:bg-white/20"
-            }`}
-          />
-          {status === "idle" && "Microphone off"}
-          {status === "requesting" && "Requesting microphone access…"}
-          {status === "active" && "Microphone active"}
-          {status === "denied" && "Microphone permission denied"}
-          {status === "error" && "Microphone error"}
+        <div role="status" className="flex flex-col gap-2">
+          <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+            <span
+              className={`h-2.5 w-2.5 shrink-0 rounded-full ${
+                status === "active"
+                  ? "bg-green-500"
+                  : status === "requesting"
+                    ? "bg-yellow-500"
+                    : status === "denied" || status === "error"
+                      ? "bg-red-500"
+                      : "bg-black/20 dark:bg-white/20"
+              }`}
+            />
+            {status === "idle" && "Microphone off"}
+            {status === "requesting" && "Requesting microphone access…"}
+            {status === "active" && "Microphone active"}
+            {status === "denied" && "Microphone permission denied"}
+            {status === "error" && "Microphone error"}
+          </div>
+
+          {status === "denied" && (
+            <p className="text-sm text-foreground/60">
+              Microphone access is required to run the interview. Allow
+              microphone access for this site in your browser settings, then
+              try again.
+            </p>
+          )}
+
+          {status === "error" && error && (
+            <p className="text-sm text-foreground/60">{error}</p>
+          )}
         </div>
-
-        {status === "denied" && (
-          <p className="text-sm text-foreground/60">
-            Microphone access is required to run the interview. Allow
-            microphone access for this site in your browser settings, then
-            try again.
-          </p>
-        )}
-
-        {status === "error" && error && (
-          <p className="text-sm text-foreground/60">{error}</p>
-        )}
 
         {status === "idle" && (
           <button

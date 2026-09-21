@@ -16,36 +16,66 @@ interface UseMicrophoneStreamResult {
   stop: () => void;
 }
 
+function stopAllTracks(stream: MediaStream | null) {
+  stream?.getTracks().forEach((track) => track.stop());
+}
+
 export function useMicrophoneStream(): UseMicrophoneStreamResult {
   const [status, setStatus] = useState<MicrophoneStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  // Bumped on every stop()/unmount so an in-flight getUserMedia() request
+  // can recognize it's been superseded and discard its result instead of
+  // resurrecting a stream nothing will ever stop again.
+  const requestIdRef = useRef(0);
+  const pendingRef = useRef(false);
 
   const stop = useCallback(() => {
-    streamRef.current?.getTracks().forEach((track) => track.stop());
+    requestIdRef.current += 1;
+    pendingRef.current = false;
+    stopAllTracks(streamRef.current);
     streamRef.current = null;
     setStatus("idle");
   }, []);
 
   useEffect(() => {
     return () => {
-      streamRef.current?.getTracks().forEach((track) => track.stop());
+      requestIdRef.current += 1;
+      pendingRef.current = false;
+      stopAllTracks(streamRef.current);
       streamRef.current = null;
     };
   }, []);
 
   const start = useCallback(async () => {
-    if (streamRef.current || status === "requesting") return;
+    // Refs (not `status` state) guard against overlapping calls: state
+    // updates aren't visible until the next render, so two start() calls
+    // issued before a re-render would otherwise both pass this check.
+    if (pendingRef.current || streamRef.current) return;
+    pendingRef.current = true;
 
+    const requestId = ++requestIdRef.current;
     setStatus("requesting");
     setError(null);
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: true,
       });
+
+      if (requestId !== requestIdRef.current) {
+        // Superseded by stop()/unmount while the request was in flight.
+        stopAllTracks(stream);
+        return;
+      }
+
       streamRef.current = stream;
+      pendingRef.current = false;
       setStatus("active");
     } catch (err) {
+      if (requestId !== requestIdRef.current) return;
+      pendingRef.current = false;
+
       const name = err instanceof DOMException ? err.name : undefined;
       if (name === "NotAllowedError" || name === "PermissionDeniedError") {
         setStatus("denied");
@@ -58,7 +88,7 @@ export function useMicrophoneStream(): UseMicrophoneStreamResult {
         );
       }
     }
-  }, [status]);
+  }, []);
 
   return { status, error, start, stop };
 }
