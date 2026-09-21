@@ -62,7 +62,18 @@ export async function POST(request: Request) {
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (err) {
-    console.error("Failed to create realtime client secret:", err);
+    // Log only structured, non-sensitive diagnostics — never the raw error
+    // object/message, which may embed upstream response text.
+    const diagnostics =
+      err instanceof OpenAI.APIError
+        ? {
+            status: err.status,
+            code: err.code,
+            type: err.type,
+            requestID: err.requestID,
+          }
+        : { name: err instanceof Error ? err.name : typeof err };
+    console.error("Failed to create realtime client secret.", diagnostics);
     return jsonError("Failed to start a realtime session.", 502);
   }
 }

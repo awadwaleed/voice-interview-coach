@@ -1,12 +1,32 @@
+import { inspect } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const createMock = vi.fn();
 
-vi.mock("openai", () => ({
-  default: vi.fn().mockImplementation(function MockOpenAI() {
+class MockAPIError extends Error {
+  status?: number;
+  code?: string;
+  type?: string;
+  requestID?: string;
+
+  constructor(
+    message: string,
+    fields: { status?: number; code?: string; type?: string; requestID?: string } = {},
+  ) {
+    super(message);
+    Object.assign(this, fields);
+  }
+}
+
+vi.mock("openai", () => {
+  const OpenAIMock = vi.fn().mockImplementation(function MockOpenAI() {
     return { realtime: { clientSecrets: { create: createMock } } };
-  }),
-}));
+  });
+  // The real OpenAI class exposes APIError as a static property (`OpenAI.APIError`),
+  // not just a named export — the route's `instanceof` check relies on that.
+  (OpenAIMock as unknown as { APIError: unknown }).APIError = MockAPIError;
+  return { default: OpenAIMock };
+});
 
 const { POST } = await import("./route");
 
@@ -88,7 +108,8 @@ describe("POST /api/realtime/session", () => {
     expect(callArgs.session.instructions).toContain("Backend Engineer");
   });
 
-  it("returns 502 without leaking upstream error details when the OpenAI call fails", async () => {
+  it("returns 502 without leaking upstream error details in the response or logs", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     createMock.mockRejectedValue(new Error("upstream detail: sk-should-not-leak"));
 
     const res = await POST(
@@ -100,5 +121,59 @@ describe("POST /api/realtime/session", () => {
     expect(res.status).toBe(502);
     const json = await res.json();
     expect(JSON.stringify(json)).not.toContain("sk-should-not-leak");
+
+    // Assert the exact logged arguments rather than JSON.stringify-ing them:
+    // Error.message is non-enumerable, so JSON.stringify(new Error(...)) is
+    // "{}" and would silently pass even if the raw Error were logged again.
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+    const [message, diagnostics] = consoleErrorSpy.mock.calls[0];
+    expect(message).toBe("Failed to create realtime client secret.");
+    expect(diagnostics).not.toBeInstanceOf(Error);
+    expect(diagnostics).toEqual({ name: "Error" });
+
+    // Defense in depth: a console-style rendering of exactly what was
+    // logged (not just JSON.stringify) must not contain the sensitive text.
+    expect(inspect(consoleErrorSpy.mock.calls, { depth: null })).not.toContain(
+      "sk-should-not-leak",
+    );
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it("logs only structured diagnostics (status/code/type/requestID) for an upstream API error, never its message", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    createMock.mockRejectedValue(
+      new MockAPIError("sensitive upstream text: sk-should-not-leak", {
+        status: 429,
+        code: "rate_limit_exceeded",
+        type: "rate_limit_error",
+        requestID: "req_abc123",
+      }),
+    );
+
+    const res = await POST(
+      makeJsonRequest({
+        config: { role: "Engineer", type: "technical", difficulty: "entry" },
+      }),
+    );
+
+    expect(res.status).toBe(502);
+
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+    const [message, diagnostics] = consoleErrorSpy.mock.calls[0];
+    expect(message).toBe("Failed to create realtime client secret.");
+    expect(diagnostics).not.toBeInstanceOf(Error);
+    expect(diagnostics).toEqual({
+      status: 429,
+      code: "rate_limit_exceeded",
+      type: "rate_limit_error",
+      requestID: "req_abc123",
+    });
+
+    expect(inspect(consoleErrorSpy.mock.calls, { depth: null })).not.toContain(
+      "sk-should-not-leak",
+    );
+
+    consoleErrorSpy.mockRestore();
   });
 });
