@@ -1,6 +1,8 @@
 "use client";
 
+import { useRef } from "react";
 import { useMicrophoneStream } from "@/src/hooks/useMicrophoneStream";
+import { useRealtimeInterview } from "@/src/hooks/useRealtimeInterview";
 import type { InterviewConfig } from "@/src/types/interview";
 
 interface InterviewScreenProps {
@@ -20,19 +22,33 @@ const DIFFICULTY_LABELS: Record<InterviewConfig["difficulty"], string> = {
   advanced: "Advanced",
 };
 
+const PRIMARY_BUTTON_CLASS =
+  "w-full rounded-full bg-foreground px-5 py-2.5 text-sm font-medium text-background transition-colors disabled:cursor-not-allowed disabled:opacity-50";
+
+const SECONDARY_BUTTON_CLASS =
+  "w-full rounded-full border border-black/10 px-5 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-black/5 dark:border-white/15 dark:hover:bg-white/10";
+
 export default function InterviewScreen({
   config,
   onEnd,
 }: InterviewScreenProps) {
-  const { status, error, start, stop } = useMicrophoneStream();
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const mic = useMicrophoneStream();
+  const realtime = useRealtimeInterview(config, mic.stream, audioRef);
+
+  const isCallLive =
+    realtime.status === "connecting" || realtime.status === "active";
 
   const handleEnd = () => {
-    stop();
+    realtime.disconnect();
+    mic.stop();
     onEnd();
   };
 
   return (
     <div className="w-full max-w-md rounded-2xl border border-black/10 bg-white p-8 shadow-sm dark:border-white/15 dark:bg-black">
+      <audio ref={audioRef} autoPlay hidden />
+
       <h1 className="text-xl font-semibold text-foreground">
         Interview in progress
       </h1>
@@ -46,23 +62,23 @@ export default function InterviewScreen({
           <div className="flex items-center gap-2 text-sm font-medium text-foreground">
             <span
               className={`h-2.5 w-2.5 shrink-0 rounded-full ${
-                status === "active"
+                mic.status === "active"
                   ? "bg-green-500"
-                  : status === "requesting"
+                  : mic.status === "requesting"
                     ? "bg-yellow-500"
-                    : status === "denied" || status === "error"
+                    : mic.status === "denied" || mic.status === "error"
                       ? "bg-red-500"
                       : "bg-black/20 dark:bg-white/20"
               }`}
             />
-            {status === "idle" && "Microphone off"}
-            {status === "requesting" && "Requesting microphone access…"}
-            {status === "active" && "Microphone active"}
-            {status === "denied" && "Microphone permission denied"}
-            {status === "error" && "Microphone error"}
+            {mic.status === "idle" && "Microphone off"}
+            {mic.status === "requesting" && "Requesting microphone access…"}
+            {mic.status === "active" && "Microphone active"}
+            {mic.status === "denied" && "Microphone permission denied"}
+            {mic.status === "error" && "Microphone error"}
           </div>
 
-          {status === "denied" && (
+          {mic.status === "denied" && (
             <p className="text-sm text-foreground/60">
               Microphone access is required to run the interview. Allow
               microphone access for this site in your browser settings, then
@@ -70,46 +86,95 @@ export default function InterviewScreen({
             </p>
           )}
 
-          {status === "error" && error && (
-            <p className="text-sm text-foreground/60">{error}</p>
+          {mic.status === "error" && mic.error && (
+            <p className="text-sm text-foreground/60">{mic.error}</p>
+          )}
+
+          {mic.status === "active" && (
+            <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+              <span
+                className={`h-2.5 w-2.5 shrink-0 rounded-full ${
+                  realtime.status === "active"
+                    ? "bg-green-500"
+                    : realtime.status === "connecting"
+                      ? "bg-yellow-500"
+                      : realtime.status === "error"
+                        ? "bg-red-500"
+                        : "bg-black/20 dark:bg-white/20"
+                }`}
+              />
+              {realtime.status === "idle" && "Not connected"}
+              {realtime.status === "connecting" && "Connecting…"}
+              {realtime.status === "active" && "Connected — say hello"}
+              {realtime.status === "error" && "Connection failed"}
+            </div>
+          )}
+
+          {realtime.status === "error" && realtime.error && (
+            <p className="text-sm text-foreground/60">{realtime.error}</p>
+          )}
+
+          {realtime.audioBlocked && (
+            <p className="text-sm text-foreground/60">
+              Your browser blocked the interviewer&apos;s audio from playing
+              automatically.
+            </p>
           )}
         </div>
 
-        {status === "idle" && (
-          <button
-            type="button"
-            onClick={start}
-            className="w-full rounded-full bg-foreground px-5 py-2.5 text-sm font-medium text-background transition-colors"
-          >
+        {mic.status === "idle" && (
+          <button type="button" onClick={mic.start} className={PRIMARY_BUTTON_CLASS}>
             Enable Microphone
           </button>
         )}
 
-        {(status === "denied" || status === "error") && (
-          <button
-            type="button"
-            onClick={start}
-            className="w-full rounded-full bg-foreground px-5 py-2.5 text-sm font-medium text-background transition-colors"
-          >
+        {(mic.status === "denied" || mic.status === "error") && (
+          <button type="button" onClick={mic.start} className={PRIMARY_BUTTON_CLASS}>
             Retry
           </button>
         )}
 
-        {status === "active" && (
+        {mic.status === "active" && realtime.status === "idle" && (
           <button
             type="button"
-            onClick={stop}
-            className="w-full rounded-full border border-black/10 px-5 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-black/5 dark:border-white/15 dark:hover:bg-white/10"
+            onClick={realtime.connect}
+            className={PRIMARY_BUTTON_CLASS}
+          >
+            Connect
+          </button>
+        )}
+
+        {realtime.status === "error" && (
+          <button
+            type="button"
+            onClick={realtime.connect}
+            className={PRIMARY_BUTTON_CLASS}
+          >
+            Retry Connection
+          </button>
+        )}
+
+        {realtime.audioBlocked && (
+          <button
+            type="button"
+            onClick={realtime.resumeAudio}
+            className={PRIMARY_BUTTON_CLASS}
+          >
+            Play Interviewer Audio
+          </button>
+        )}
+
+        {mic.status === "active" && !isCallLive && (
+          <button
+            type="button"
+            onClick={mic.stop}
+            className={SECONDARY_BUTTON_CLASS}
           >
             Stop Microphone
           </button>
         )}
 
-        <button
-          type="button"
-          onClick={handleEnd}
-          className="w-full rounded-full border border-black/10 px-5 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-black/5 dark:border-white/15 dark:hover:bg-white/10"
-        >
+        <button type="button" onClick={handleEnd} className={SECONDARY_BUTTON_CLASS}>
           End Interview
         </button>
       </div>

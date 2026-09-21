@@ -12,6 +12,7 @@ export type MicrophoneStatus =
 interface UseMicrophoneStreamResult {
   status: MicrophoneStatus;
   error: string | null;
+  stream: MediaStream | null;
   start: () => Promise<void>;
   stop: () => void;
 }
@@ -23,6 +24,7 @@ function stopAllTracks(stream: MediaStream | null) {
 export function useMicrophoneStream(): UseMicrophoneStreamResult {
   const [status, setStatus] = useState<MicrophoneStatus>("idle");
   const [error, setError] = useState<string | null>(null);
+  const [stream, setStream] = useState<MediaStream | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   // Bumped on every stop()/unmount so an in-flight getUserMedia() request
   // can recognize it's been superseded and discard its result instead of
@@ -35,6 +37,7 @@ export function useMicrophoneStream(): UseMicrophoneStreamResult {
     pendingRef.current = false;
     stopAllTracks(streamRef.current);
     streamRef.current = null;
+    setStream(null);
     setStatus("idle");
   }, []);
 
@@ -71,6 +74,7 @@ export function useMicrophoneStream(): UseMicrophoneStreamResult {
 
       streamRef.current = stream;
       pendingRef.current = false;
+      setStream(stream);
       setStatus("active");
     } catch (err) {
       if (requestId !== requestIdRef.current) return;
@@ -90,5 +94,5 @@ export function useMicrophoneStream(): UseMicrophoneStreamResult {
     }
   }, []);
 
-  return { status, error, start, stop };
+  return { status, error, stream, start, stop };
 }
