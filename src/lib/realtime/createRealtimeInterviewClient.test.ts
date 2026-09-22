@@ -640,6 +640,60 @@ describe("createRealtimeInterviewClient", () => {
     });
   });
 
+  it("still records the transcript text if output_audio_buffer.cleared arrives before the transcript-done event", async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === "/api/realtime/session") return Promise.resolve(sessionFetchResponse());
+      return Promise.resolve(sdpFetchResponse());
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { stream } = makeMicStream();
+    const audioElement = makeAudioElement();
+
+    const client = createRealtimeInterviewClient({
+      config: CONFIG,
+      micStream: stream,
+      getAudioElement: () => audioElement as unknown as HTMLAudioElement,
+    });
+
+    client.connect();
+    await flush();
+    const dc = peerConnections[0].dataChannel!;
+    dc.simulateMessage({ type: "session.created" });
+
+    dc.simulateMessage({
+      type: "response.output_item.added",
+      response_id: "resp_1",
+      output_index: 0,
+      item: { id: "interviewer_1", role: "assistant", type: "message" },
+    });
+    dc.simulateMessage({
+      type: "conversation.item.added",
+      item: { id: "interviewer_1", role: "assistant", type: "message" },
+      previous_item_id: null,
+    });
+
+    // The interruption is detected (VAD) before this item's own
+    // transcript-done event arrives.
+    dc.simulateMessage({ type: "output_audio_buffer.cleared", response_id: "resp_1" });
+    expect(client.getState().transcript[0]).toMatchObject({
+      status: "interrupted",
+      transcript: "",
+    });
+
+    dc.simulateMessage({
+      type: "response.output_audio_transcript.done",
+      item_id: "interviewer_1",
+      transcript: "Let's talk about your background and ex",
+    });
+
+    // The text is still legitimate content and must be recorded, while the
+    // status must not revert to "complete".
+    expect(client.getState().transcript[0]).toMatchObject({
+      status: "interrupted",
+      transcript: "Let's talk about your background and ex",
+    });
+  });
+
   it("ignores output_audio_buffer.cleared for an unrecognized response_id", async () => {
     const fetchMock = vi.fn((url: string) => {
       if (url === "/api/realtime/session") return Promise.resolve(sessionFetchResponse());

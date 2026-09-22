@@ -223,21 +223,26 @@ describe("applyRealtimeEventToTranscript", () => {
       });
     });
 
-    it("does not let a later transcript-completion event downgrade an interrupted turn back to complete", () => {
+    it("does not let a later transcript-completion event downgrade an interrupted turn back to complete, but still records its text", () => {
+      // Interruption can be detected (via VAD) before the item's own
+      // generation/transcription-done event arrives for it.
       let transcript = applyRealtimeEventToTranscript([], added("a", "assistant"));
       transcript = applyRealtimeEventToTranscript(transcript, {
         type: "conversation.item.truncated",
         item_id: "a",
       });
-      expect(transcript[0].status).toBe("interrupted");
+      expect(transcript[0]).toMatchObject({ status: "interrupted", transcript: "" });
 
-      // A stray/duplicate completion event arriving after truncation must
-      // not resurrect "complete".
+      // The transcript text itself is legitimate content and must still be
+      // recorded — only the status must not revert to "complete".
       transcript = applyRealtimeEventToTranscript(
         transcript,
-        outputTranscriptDone("a", "some text"),
+        outputTranscriptDone("a", "So tell me about a time you had to"),
       );
-      expect(transcript[0].status).toBe("interrupted");
+      expect(transcript[0]).toMatchObject({
+        status: "interrupted",
+        transcript: "So tell me about a time you had to",
+      });
     });
 
     it("ignores a truncated event referencing an unknown item id", () => {

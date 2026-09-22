@@ -60,19 +60,41 @@ function withTurn(
   transcript: InterviewTurn[],
   itemId: string,
   patch: Partial<InterviewTurn>,
-  options: { skipIfTerminal?: boolean } = {},
 ): InterviewTurn[] {
   let changed = false;
   const next = transcript.map((turn) => {
     if (turn.id !== itemId) return turn;
-    if (options.skipIfTerminal && TERMINAL_STATUSES.has(turn.status)) {
-      return turn;
-    }
     changed = true;
     return { ...turn, ...patch };
   });
   // Preserve reference equality when nothing matched, so callers can cheaply
   // skip a state update for an event referencing an unknown/stale item id.
+  return changed ? next : transcript;
+}
+
+/**
+ * Applies transcript text as it arrives. The text itself is always kept —
+ * it's legitimate content regardless of ordering — but status only becomes
+ * "complete" if the turn hasn't already reached a terminal status (e.g. an
+ * interruption signal arriving before this text does). Interruption can be
+ * detected before or after the transcript text itself arrives; either way
+ * the text must be recorded and the terminal status must stick.
+ */
+function withTranscriptText(
+  transcript: InterviewTurn[],
+  itemId: string,
+  text: string,
+): InterviewTurn[] {
+  let changed = false;
+  const next = transcript.map((turn) => {
+    if (turn.id !== itemId) return turn;
+    changed = true;
+    return {
+      ...turn,
+      transcript: text,
+      status: TERMINAL_STATUSES.has(turn.status) ? turn.status : "complete",
+    };
+  });
   return changed ? next : transcript;
 }
 
@@ -131,12 +153,7 @@ export function applyRealtimeEventToTranscript(
       if (typeof itemId !== "string" || typeof text !== "string") {
         return transcript;
       }
-      return withTurn(
-        transcript,
-        itemId,
-        { transcript: text, status: "complete" },
-        { skipIfTerminal: true },
-      );
+      return withTranscriptText(transcript, itemId, text);
     }
 
     case "conversation.item.input_audio_transcription.failed": {
