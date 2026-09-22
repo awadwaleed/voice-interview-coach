@@ -6,6 +6,7 @@ import {
 } from "@/src/lib/interview/config";
 import {
   InvalidTranscriptError,
+  hasEvaluableContent,
   validateTranscript,
 } from "@/src/lib/feedback/validateTranscript";
 import {
@@ -51,6 +52,16 @@ export async function POST(request: Request) {
       return jsonError(err.message, 400);
     }
     throw err;
+  }
+
+  // The UI already gates this, but this endpoint must not trust that — a
+  // direct request with only interviewer turns (or only pending/failed/
+  // unavailable candidate turns) has nothing for the evaluator to assess.
+  if (!hasEvaluableContent(transcript)) {
+    return jsonError(
+      "The transcript has no candidate answers to evaluate.",
+      400,
+    );
   }
 
   const apiKey = process.env.OPENAI_API_KEY;

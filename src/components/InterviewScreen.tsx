@@ -1,18 +1,29 @@
 "use client";
 
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   PRIMARY_BUTTON_CLASS,
   SECONDARY_BUTTON_CLASS,
 } from "@/src/components/buttonStyles";
 import { useMicrophoneStream } from "@/src/hooks/useMicrophoneStream";
 import { useRealtimeInterview } from "@/src/hooks/useRealtimeInterview";
+import { markPendingTurnsUnavailable } from "@/src/lib/realtime/transcript";
 import type { InterviewConfig, InterviewTurn } from "@/src/types/interview";
 
 interface InterviewScreenProps {
   config: InterviewConfig;
   onEnd: (transcript: InterviewTurn[]) => void;
 }
+
+/**
+ * If the candidate finishes speaking and immediately clicks End Interview,
+ * that answer's conversation item already exists server-side (audio was
+ * already committed) but its transcription may not have arrived yet. Ending
+ * immediately would snapshot it as "pending" forever and silently drop it.
+ * This is how long we keep the connection alive (mic/playback already
+ * stopped) waiting for any already-in-flight transcription to complete.
+ */
+const FINALIZE_TIMEOUT_MS = 4000;
 
 const TYPE_LABELS: Record<InterviewConfig["type"], string> = {
   behavioral: "Behavioral",
@@ -69,12 +80,56 @@ export default function InterviewScreen({
   const isCallLive =
     realtime.status === "connecting" || realtime.status === "active";
 
-  const handleEnd = () => {
-    const transcript = realtime.transcript;
-    realtime.disconnect();
-    mic.stop();
-    onEnd(transcript);
+  const [isEnding, setIsEnding] = useState(false);
+  const endDeadlineRef = useRef<number | null>(null);
+  const finalizedRef = useRef(false);
+
+  const handleEndClick = () => {
+    if (isEnding) return;
+    // Stop hearing the interviewer immediately — this is purely a local
+    // <audio> element operation with no effect on the realtime connection
+    // or microphone lifecycle, so it's safe to do right away. Microphone
+    // capture is deliberately NOT stopped here: useRealtimeInterview's
+    // client lifecycle is keyed on mic.stream's identity, so calling
+    // mic.stop() immediately would tear down the realtime connection too,
+    // defeating the wait below before it can receive anything. Both are
+    // stopped together in finalize() once the wait is over.
+    audioRef.current?.pause();
+    setIsEnding(true);
   };
+
+  useEffect(() => {
+    if (!isEnding || finalizedRef.current) return;
+
+    if (endDeadlineRef.current === null) {
+      endDeadlineRef.current = Date.now() + FINALIZE_TIMEOUT_MS;
+    }
+
+    const finalize = () => {
+      if (finalizedRef.current) return;
+      finalizedRef.current = true;
+      const transcript = markPendingTurnsUnavailable(realtime.transcript);
+      realtime.disconnect();
+      mic.stop();
+      onEnd(transcript);
+    };
+
+    const stillWaiting =
+      realtime.status !== "error" &&
+      realtime.transcript.some((turn) => turn.status === "pending");
+    if (!stillWaiting) {
+      finalize();
+      return;
+    }
+
+    const remaining = Math.max(0, endDeadlineRef.current - Date.now());
+    const timeoutId = setTimeout(finalize, remaining);
+    return () => clearTimeout(timeoutId);
+    // realtime/onEnd/audioRef are effectively stable for this screen's
+    // lifetime; re-running on every transcript/status change (not on their
+    // identity) is exactly what's needed to detect early resolution.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEnding, realtime.status, realtime.transcript]);
 
   return (
     <div className="w-full max-w-md rounded-2xl border border-black/10 bg-white p-8 shadow-sm dark:border-white/15 dark:bg-black">
@@ -213,8 +268,13 @@ export default function InterviewScreen({
           </button>
         )}
 
-        <button type="button" onClick={handleEnd} className={SECONDARY_BUTTON_CLASS}>
-          End Interview
+        <button
+          type="button"
+          onClick={handleEndClick}
+          disabled={isEnding}
+          className={SECONDARY_BUTTON_CLASS}
+        >
+          {isEnding ? "Finishing up…" : "End Interview"}
         </button>
       </div>
     </div>

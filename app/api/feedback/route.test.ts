@@ -108,6 +108,32 @@ describe("POST /api/feedback", () => {
     expect(createMock).not.toHaveBeenCalled();
   });
 
+  it("returns 400 and never calls the model for a transcript with no evaluable candidate content", async () => {
+    const res = await POST(
+      makeJsonRequest({
+        config: VALID_CONFIG,
+        transcript: [
+          {
+            id: "turn_1",
+            speaker: "interviewer",
+            transcript: "Tell me about yourself.",
+            timestamp: 1,
+            status: "complete",
+          },
+          {
+            id: "turn_2",
+            speaker: "candidate",
+            transcript: "",
+            timestamp: 2,
+            status: "pending",
+          },
+        ],
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
   it("returns 500 and does not call OpenAI when the API key is missing", async () => {
     delete process.env.OPENAI_API_KEY;
     const res = await POST(

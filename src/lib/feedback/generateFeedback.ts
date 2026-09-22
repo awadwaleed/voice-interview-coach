@@ -27,20 +27,39 @@ const SPEAKER_LABELS = {
   candidate: "Candidate",
 } as const;
 
+/** Only turns with real spoken/generated content are evaluable — pending/failed/unavailable turns have no text. */
+function isEvaluableTurn(turn: InterviewTurn): boolean {
+  return (
+    (turn.status === "complete" || turn.status === "interrupted") &&
+    turn.transcript.trim().length > 0
+  );
+}
+
 /**
- * Only turns with real spoken/generated content are worth putting in front
- * of the evaluator model — pending/failed/unavailable turns have no text.
+ * The candidate turn ids the model is shown (via formatTranscript's [id: ...]
+ * tags) and therefore the only ids it can legitimately reference in
+ * answerFeedback[].turnId. Model output is validated against this exact set
+ * — see parseFeedbackResponse.
  */
+export function getEligibleAnswerTurnIds(
+  transcript: InterviewTurn[],
+): Set<string> {
+  return new Set(
+    transcript
+      .filter((turn) => turn.speaker === "candidate" && isEvaluableTurn(turn))
+      .map((turn) => turn.id),
+  );
+}
+
 function formatTranscript(transcript: InterviewTurn[]): string {
   return transcript
-    .filter(
-      (turn) =>
-        (turn.status === "complete" || turn.status === "interrupted") &&
-        turn.transcript.trim().length > 0,
-    )
+    .filter(isEvaluableTurn)
     .map((turn) => {
       const cutShort = turn.status === "interrupted" ? " [cut short]" : "";
-      return `${SPEAKER_LABELS[turn.speaker]}${cutShort}: ${turn.transcript.trim()}`;
+      // Only candidate lines are tagged — these are the only ids
+      // answerFeedback[].turnId is allowed to reference.
+      const idTag = turn.speaker === "candidate" ? ` [id: ${turn.id}]` : "";
+      return `${SPEAKER_LABELS[turn.speaker]}${idTag}${cutShort}: ${turn.transcript.trim()}`;
     })
     .join("\n");
 }
@@ -54,6 +73,7 @@ export function buildFeedbackPrompt(
     "Evaluate only the candidate's answers, based strictly on what appears in the transcript below. Be specific and constructive: back up every point with something the candidate actually said. Be honest about weaknesses while remaining encouraging.",
     'For each candidate answer that responds to a behavioral-style question, include starStructureNotes assessing its Situation/Task/Action/Result structure; omit starStructureNotes for answers to purely technical questions.',
     "A turn marked [cut short] means the interviewer's audio was interrupted — the candidate may not have heard all of it.",
+    "Each candidate line below is tagged with its exact id, like [id: candidate_1]. For every answerFeedback entry, set turnId to exactly one of these tagged ids — never invent, alter, or reuse an id for more than one entry, and never reference an interviewer line.",
     "",
     "--- TRANSCRIPT START ---",
     formatTranscript(transcript),
@@ -76,7 +96,7 @@ const ANSWER_FEEDBACK_SCHEMA = {
 const FEEDBACK_JSON_SCHEMA = {
   type: "object",
   properties: {
-    overallScore: { type: "number" },
+    overallScore: { type: "integer", minimum: 1, maximum: 10 },
     overallSummary: { type: "string" },
     strengths: { type: "array", items: { type: "string" } },
     improvements: { type: "array", items: { type: "string" } },
@@ -108,9 +128,15 @@ function isStringArray(value: unknown): value is string[] {
 
 /**
  * Model output is never trusted blindly, even with a strict schema — the
- * same rigor applied to client-supplied input applies here.
+ * same rigor applied to client-supplied input applies here. eligibleTurnIds
+ * is the exact set of candidate turn ids the model was shown (see
+ * getEligibleAnswerTurnIds) — answerFeedback[].turnId must be one of these,
+ * with no duplicates, or the whole response is rejected.
  */
-export function parseFeedbackResponse(raw: unknown): InterviewFeedback {
+export function parseFeedbackResponse(
+  raw: unknown,
+  eligibleTurnIds: ReadonlySet<string>,
+): InterviewFeedback {
   if (!isRecord(raw)) {
     throw new InvalidFeedbackResponseError("Feedback response must be an object.");
   }
@@ -125,8 +151,15 @@ export function parseFeedbackResponse(raw: unknown): InterviewFeedback {
     suggestionsForNextPractice,
   } = raw;
 
-  if (typeof overallScore !== "number" || !Number.isFinite(overallScore)) {
-    throw new InvalidFeedbackResponseError("overallScore must be a number.");
+  if (
+    typeof overallScore !== "number" ||
+    !Number.isInteger(overallScore) ||
+    overallScore < 1 ||
+    overallScore > 10
+  ) {
+    throw new InvalidFeedbackResponseError(
+      "overallScore must be an integer from 1 to 10.",
+    );
   }
   if (typeof overallSummary !== "string") {
     throw new InvalidFeedbackResponseError("overallSummary must be a string.");
@@ -149,6 +182,7 @@ export function parseFeedbackResponse(raw: unknown): InterviewFeedback {
     );
   }
 
+  const seenTurnIds = new Set<string>();
   const parsedAnswerFeedback: AnswerFeedback[] = answerFeedback.map((item, index) => {
     if (!isRecord(item)) {
       throw new InvalidFeedbackResponseError(`answerFeedback[${index}] must be an object.`);
@@ -157,6 +191,17 @@ export function parseFeedbackResponse(raw: unknown): InterviewFeedback {
     if (typeof turnId !== "string") {
       throw new InvalidFeedbackResponseError(`answerFeedback[${index}].turnId must be a string.`);
     }
+    if (!eligibleTurnIds.has(turnId)) {
+      throw new InvalidFeedbackResponseError(
+        `answerFeedback[${index}].turnId does not reference an eligible candidate answer.`,
+      );
+    }
+    if (seenTurnIds.has(turnId)) {
+      throw new InvalidFeedbackResponseError(
+        `answerFeedback[${index}].turnId duplicates an earlier entry.`,
+      );
+    }
+    seenTurnIds.add(turnId);
     if (!isStringArray(answerStrengths)) {
       throw new InvalidFeedbackResponseError(
         `answerFeedback[${index}].strengths must be an array of strings.`,
@@ -225,5 +270,5 @@ export async function generateInterviewFeedback({
     throw new InvalidFeedbackResponseError("Feedback response was not valid JSON.");
   }
 
-  return parseFeedbackResponse(parsedOutput);
+  return parseFeedbackResponse(parsedOutput, getEligibleAnswerTurnIds(transcript));
 }
