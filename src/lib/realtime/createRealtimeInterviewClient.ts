@@ -88,31 +88,47 @@ export function createRealtimeInterviewClient({
     const controller = new AbortController();
     credentialFetchController = controller;
 
-    const call = createRealtimeCall({
-      micStream,
-      getAudioElement,
-      onEvent: (event) => {
-        if (attemptId !== myAttempt) return;
-        handleEvent(event, call);
-      },
-      onConnectionStateChange: (rtcState) => {
-        if (attemptId !== myAttempt) return;
-        if (rtcState === "failed" || rtcState === "closed") {
-          fail("The realtime connection was lost.");
-        }
-      },
-      onAudioBlocked: () => {
-        if (attemptId !== myAttempt) return;
-        setState({ audioBlocked: true });
-      },
-    });
-    activeCall = call;
-
     function fail(message: string) {
       if (attemptId !== myAttempt) return;
       teardown();
       setState({ status: "error", error: message });
     }
+
+    let call: ReturnType<typeof createRealtimeCall>;
+    try {
+      call = createRealtimeCall({
+        micStream,
+        getAudioElement,
+        onEvent: (event) => {
+          if (attemptId !== myAttempt) return;
+          handleEvent(event, call);
+        },
+        onConnectionStateChange: (rtcState) => {
+          if (attemptId !== myAttempt) return;
+          if (rtcState === "failed" || rtcState === "closed") {
+            fail("The realtime connection was lost.");
+          }
+        },
+        onAudioBlocked: () => {
+          if (attemptId !== myAttempt) return;
+          setState({ audioBlocked: true });
+        },
+      });
+    } catch (err) {
+      // Synchronous transport setup (RTCPeerConnection/addTrack/
+      // createDataChannel) failed before any async work even started.
+      // Without this, status would be stuck at "connecting" forever: no
+      // error state, no Retry, Stop Microphone hidden, future connect()
+      // calls ignored. fail() -> teardown() aborts/clears
+      // credentialFetchController for us.
+      fail(
+        err instanceof Error
+          ? err.message
+          : "Failed to start the realtime connection.",
+      );
+      return;
+    }
+    activeCall = call;
 
     function handleEvent(event: unknown, thisCall: typeof call) {
       const type = (event as { type?: unknown } | null)?.type;
@@ -169,9 +185,16 @@ export function createRealtimeInterviewClient({
   }
 
   function resumeAudio() {
+    // Capture the attempt this call belongs to: if it's superseded by a
+    // disconnect/reconnect before play() settles, a late completion must
+    // not touch a newer attempt's (possibly still genuinely blocked) state.
+    const myAttempt = attemptId;
     const audioElement = getAudioElement();
     audioElement?.play().then(
-      () => setState({ audioBlocked: false }),
+      () => {
+        if (attemptId !== myAttempt) return;
+        setState({ audioBlocked: false });
+      },
       () => {
         // Still blocked; leave audioBlocked true.
       },

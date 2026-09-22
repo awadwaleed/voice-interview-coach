@@ -392,4 +392,110 @@ describe("createRealtimeInterviewClient", () => {
     client.subscribe(listener);
     expect(listener).toHaveBeenCalledTimes(1);
   });
+
+  it("a synchronous transport setup failure surfaces status: error (not stuck connecting), preserves the mic, and allows Retry", async () => {
+    // Force RTCPeerConnection construction itself to throw, simulating any
+    // synchronous createRealtimeCall() setup failure (constructor,
+    // addTrack, createDataChannel).
+    vi.stubGlobal(
+      "RTCPeerConnection",
+      vi.fn().mockImplementation(function ThrowingRTCPeerConnection() {
+        throw new Error("RTCPeerConnection is not supported");
+      }),
+    );
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const { stream, track } = makeMicStream();
+    const audioElement = makeAudioElement();
+
+    const client = createRealtimeInterviewClient({
+      config: CONFIG,
+      micStream: stream,
+      getAudioElement: () => audioElement as unknown as HTMLAudioElement,
+    });
+
+    client.connect();
+
+    expect(client.getState().status).toBe("error");
+    expect(client.getState().error).toContain("RTCPeerConnection");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(track.stop).not.toHaveBeenCalled();
+
+    // Retry must work — connect() shouldn't be permanently stuck.
+    vi.stubGlobal(
+      "RTCPeerConnection",
+      vi.fn().mockImplementation(function MockRTCPeerConnectionCtor() {
+        const pc = new MockPeerConnection();
+        peerConnections.push(pc);
+        return pc;
+      }),
+    );
+    const workingFetchMock = vi.fn((url: string) => {
+      if (url === "/api/realtime/session") return Promise.resolve(sessionFetchResponse());
+      return Promise.resolve(sdpFetchResponse());
+    });
+    vi.stubGlobal("fetch", workingFetchMock);
+
+    client.connect();
+    await flush();
+    peerConnections[0].dataChannel!.simulateMessage({ type: "session.created" });
+    expect(client.getState().status).toBe("active");
+  });
+
+  it("a stale resumeAudio() completion from a superseded attempt does not clear a newer attempt's audioBlocked flag", async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === "/api/realtime/session") return Promise.resolve(sessionFetchResponse());
+      return Promise.resolve(sdpFetchResponse());
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { stream } = makeMicStream();
+
+    const staleResumeDeferred = createDeferred<void>();
+    let playCallCount = 0;
+    const audioElement = {
+      srcObject: null as unknown,
+      // Call 1: attempt 1's ontrack -> rejects (blocked).
+      // Call 2: attempt 1's resumeAudio() -> stays pending (resolved later, after attempt 2 exists).
+      // Call 3: attempt 2's ontrack -> rejects (also blocked, independently).
+      play: vi.fn(() => {
+        playCallCount += 1;
+        if (playCallCount === 1) return Promise.reject(new Error("blocked"));
+        if (playCallCount === 2) return staleResumeDeferred.promise;
+        return Promise.reject(new Error("blocked"));
+      }),
+      pause: vi.fn(),
+    };
+
+    const client = createRealtimeInterviewClient({
+      config: CONFIG,
+      micStream: stream,
+      getAudioElement: () => audioElement as unknown as HTMLAudioElement,
+    });
+
+    client.connect();
+    await flush();
+    peerConnections[0].ontrack?.({ streams: [{} as MediaStream] });
+    await flush();
+    peerConnections[0].dataChannel!.simulateMessage({ type: "session.created" });
+    await flush();
+    expect(client.getState().audioBlocked).toBe(true);
+
+    client.resumeAudio(); // attempt 1's resumeAudio — its play() stays pending
+    client.disconnect();
+
+    client.connect(); // attempt 2
+    await flush();
+    peerConnections[1].ontrack?.({ streams: [{} as MediaStream] });
+    await flush();
+    peerConnections[1].dataChannel!.simulateMessage({ type: "session.created" });
+    await flush();
+    expect(client.getState().audioBlocked).toBe(true); // attempt 2 is genuinely blocked too
+
+    // Attempt 1's stale resumeAudio() now succeeds — must not clear
+    // attempt 2's (still genuinely blocked) audioBlocked flag.
+    staleResumeDeferred.resolve();
+    await flush();
+
+    expect(client.getState().audioBlocked).toBe(true);
+  });
 });

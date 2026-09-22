@@ -34,12 +34,20 @@ export function createRealtimeCall({
   const abortController = new AbortController();
   const pc = new RTCPeerConnection();
   let dc: RTCDataChannel;
+  // The specific element the remote stream was attached to, captured at
+  // attach time. On unmount, React may already have nulled the ref this
+  // call's getAudioElement() reads from before our cleanup runs — but the
+  // actual DOM node this stream was attached to still needs pause()/
+  // srcObject cleared directly, independent of whether the ref still
+  // resolves to it.
+  let attachedAudioElement: HTMLAudioElement | null = null;
 
   try {
     pc.ontrack = (event) => {
       if (closed) return;
       const audioElement = getAudioElement();
       if (!audioElement) return;
+      attachedAudioElement = audioElement;
       audioElement.srcObject = event.streams[0] ?? null;
       audioElement.play().catch(() => {
         // Guard against a delayed play() rejection from a call that has
@@ -86,10 +94,9 @@ export function createRealtimeCall({
     dc.close();
     pc.close();
 
-    const audioElement = getAudioElement();
-    if (audioElement) {
-      audioElement.pause();
-      audioElement.srcObject = null;
+    if (attachedAudioElement) {
+      attachedAudioElement.pause();
+      attachedAudioElement.srcObject = null;
     }
   }
 

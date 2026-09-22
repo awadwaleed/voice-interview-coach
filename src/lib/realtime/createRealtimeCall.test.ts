@@ -265,7 +265,6 @@ describe("createRealtimeCall", () => {
   it("disconnect() is idempotent and closes pc/dc, nulls handlers, and detaches remote audio", () => {
     const micStream = makeMicStream();
     const audioElement = makeAudioElement();
-    audioElement.srcObject = {} as unknown;
 
     const call = createRealtimeCall({
       micStream,
@@ -274,6 +273,7 @@ describe("createRealtimeCall", () => {
       onConnectionStateChange: vi.fn(),
       onAudioBlocked: vi.fn(),
     });
+    lastPeerConnection!.ontrack?.({ streams: [{} as MediaStream] });
 
     call.disconnect();
     call.disconnect(); // must not throw
@@ -282,6 +282,30 @@ describe("createRealtimeCall", () => {
     expect(lastPeerConnection!.dataChannel!.closed).toBe(true);
     expect(lastPeerConnection!.ontrack).toBeNull();
     expect(lastPeerConnection!.onconnectionstatechange).toBeNull();
+    expect(audioElement.pause).toHaveBeenCalled();
+    expect(audioElement.srcObject).toBeNull();
+  });
+
+  it("still pauses/detaches the attached audio element on disconnect even if the ref that produced it now returns null", () => {
+    // Simulates React nulling a DOM ref on unmount before effect cleanup
+    // (calling disconnect()) runs.
+    const micStream = makeMicStream();
+    const audioElement = makeAudioElement();
+    let refCleared = false;
+
+    const call = createRealtimeCall({
+      micStream,
+      getAudioElement: () =>
+        refCleared ? null : (audioElement as unknown as HTMLAudioElement),
+      onEvent: vi.fn(),
+      onConnectionStateChange: vi.fn(),
+      onAudioBlocked: vi.fn(),
+    });
+    lastPeerConnection!.ontrack?.({ streams: [{} as MediaStream] });
+
+    refCleared = true;
+    call.disconnect();
+
     expect(audioElement.pause).toHaveBeenCalled();
     expect(audioElement.srcObject).toBeNull();
   });
