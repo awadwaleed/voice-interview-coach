@@ -86,14 +86,15 @@ export default function InterviewScreen({
 
   const handleEndClick = () => {
     if (isEnding) return;
-    // Stop hearing the interviewer immediately — this is purely a local
-    // <audio> element operation with no effect on the realtime connection
-    // or microphone lifecycle, so it's safe to do right away. Microphone
-    // capture is deliberately NOT stopped here: useRealtimeInterview's
-    // client lifecycle is keyed on mic.stream's identity, so calling
-    // mic.stop() immediately would tear down the realtime connection too,
-    // defeating the wait below before it can receive anything. Both are
-    // stopped together in finalize() once the wait is over.
+    // Stop hearing the interviewer, and halt microphone capture, right
+    // away. stopCapture() (unlike stop()) releases the hardware/OS mic
+    // indicator immediately without changing mic.stream's identity or
+    // resetting the hook's status — useRealtimeInterview's client lifecycle
+    // is keyed on that identity, so calling the full stop() here would tear
+    // down the realtime connection too, defeating the wait below before it
+    // can receive anything. Full stop() (and disconnect()) happen together
+    // in finalize() once the wait is over.
+    mic.stopCapture();
     audioRef.current?.pause();
     setIsEnding(true);
   };
@@ -108,15 +109,40 @@ export default function InterviewScreen({
     const finalize = () => {
       if (finalizedRef.current) return;
       finalizedRef.current = true;
-      const transcript = markPendingTurnsUnavailable(realtime.transcript);
+      let transcript = markPendingTurnsUnavailable(realtime.transcript);
+      if (realtime.pendingCandidateAudio) {
+        // The candidate's audio was detected but the timeout elapsed
+        // before the server ever created a conversation item for it —
+        // there's no real id/text to preserve, but a synthetic
+        // "unavailable" placeholder still surfaces it through the same
+        // disclosure path as any other missing answer, rather than it
+        // vanishing with no trace at all.
+        transcript = [
+          ...transcript,
+          {
+            id: `unrecorded-${Date.now()}`,
+            speaker: "candidate",
+            transcript: "",
+            timestamp: Date.now(),
+            status: "unavailable",
+          },
+        ];
+      }
       realtime.disconnect();
       mic.stop();
       onEnd(transcript);
     };
 
+    // realtime.transcript only has a placeholder for audio that has
+    // already been committed into a conversation item. There's a gap
+    // between the candidate finishing speaking and the server actually
+    // creating that item (VAD waits out a silence threshold first) —
+    // pendingCandidateAudio covers that earlier window, so ending
+    // mid-utterance or just after doesn't silently drop it either.
     const stillWaiting =
       realtime.status !== "error" &&
-      realtime.transcript.some((turn) => turn.status === "pending");
+      (realtime.pendingCandidateAudio ||
+        realtime.transcript.some((turn) => turn.status === "pending"));
     if (!stillWaiting) {
       finalize();
       return;
@@ -129,7 +155,12 @@ export default function InterviewScreen({
     // lifetime; re-running on every transcript/status change (not on their
     // identity) is exactly what's needed to detect early resolution.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isEnding, realtime.status, realtime.transcript]);
+  }, [
+    isEnding,
+    realtime.status,
+    realtime.transcript,
+    realtime.pendingCandidateAudio,
+  ]);
 
   return (
     <div className="w-full max-w-md rounded-2xl border border-black/10 bg-white p-8 shadow-sm dark:border-white/15 dark:bg-black">

@@ -75,6 +75,22 @@ describe("buildFeedbackPrompt", () => {
     expect(prompt).toContain("[cut short]");
     expect(prompt).toContain("partial answer");
   });
+
+  it("discloses missing candidate content when a turn failed or is unavailable", async () => {
+    const { buildFeedbackPrompt } = await import("@/src/lib/feedback/generateFeedback");
+    const prompt = buildFeedbackPrompt(CONFIG, [
+      turn({ id: "a", status: "failed", transcript: "" }),
+      turn({ id: "b", status: "unavailable", transcript: "" }),
+    ]);
+    expect(prompt).toContain("2 candidate response(s) could not be captured");
+    expect(prompt).toContain("Do not penalize the candidate");
+  });
+
+  it("says nothing about missing content when there is none", async () => {
+    const { buildFeedbackPrompt } = await import("@/src/lib/feedback/generateFeedback");
+    const prompt = buildFeedbackPrompt(CONFIG, [turn()]);
+    expect(prompt).not.toContain("could not be captured");
+  });
 });
 
 describe("getEligibleAnswerTurnIds", () => {

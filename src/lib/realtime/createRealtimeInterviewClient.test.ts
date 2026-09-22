@@ -775,4 +775,97 @@ describe("createRealtimeInterviewClient", () => {
       transcript: "Welcome to the interview.",
     });
   });
+
+  it("sets pendingCandidateAudio on input_audio_buffer.speech_started and clears it once the candidate's item appears", async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === "/api/realtime/session") return Promise.resolve(sessionFetchResponse());
+      return Promise.resolve(sdpFetchResponse());
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { stream } = makeMicStream();
+    const audioElement = makeAudioElement();
+
+    const client = createRealtimeInterviewClient({
+      config: CONFIG,
+      micStream: stream,
+      getAudioElement: () => audioElement as unknown as HTMLAudioElement,
+    });
+
+    client.connect();
+    await flush();
+    const dc = peerConnections[0].dataChannel!;
+    dc.simulateMessage({ type: "session.created" });
+
+    expect(client.getState().pendingCandidateAudio).toBe(false);
+
+    dc.simulateMessage({ type: "input_audio_buffer.speech_started" });
+    expect(client.getState().pendingCandidateAudio).toBe(true);
+    // No conversation.item.added yet — the local transcript is still empty,
+    // even though we know audio is in flight.
+    expect(client.getState().transcript).toEqual([]);
+
+    dc.simulateMessage({
+      type: "conversation.item.added",
+      item: { id: "candidate_1", role: "user", type: "message" },
+      previous_item_id: null,
+    });
+
+    expect(client.getState().pendingCandidateAudio).toBe(false);
+    expect(client.getState().transcript).toHaveLength(1);
+  });
+
+  it("does not clear pendingCandidateAudio when an interviewer item is added", async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === "/api/realtime/session") return Promise.resolve(sessionFetchResponse());
+      return Promise.resolve(sdpFetchResponse());
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { stream } = makeMicStream();
+    const audioElement = makeAudioElement();
+
+    const client = createRealtimeInterviewClient({
+      config: CONFIG,
+      micStream: stream,
+      getAudioElement: () => audioElement as unknown as HTMLAudioElement,
+    });
+
+    client.connect();
+    await flush();
+    const dc = peerConnections[0].dataChannel!;
+    dc.simulateMessage({ type: "session.created" });
+
+    dc.simulateMessage({ type: "input_audio_buffer.speech_started" });
+    dc.simulateMessage({
+      type: "conversation.item.added",
+      item: { id: "interviewer_1", role: "assistant", type: "message" },
+      previous_item_id: null,
+    });
+
+    expect(client.getState().pendingCandidateAudio).toBe(true);
+  });
+
+  it("resets pendingCandidateAudio to false at the start of each connect() attempt", async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === "/api/realtime/session") return Promise.resolve(sessionFetchResponse());
+      return Promise.resolve(sdpFetchResponse());
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { stream } = makeMicStream();
+    const audioElement = makeAudioElement();
+
+    const client = createRealtimeInterviewClient({
+      config: CONFIG,
+      micStream: stream,
+      getAudioElement: () => audioElement as unknown as HTMLAudioElement,
+    });
+
+    client.connect();
+    await flush();
+    peerConnections[0].dataChannel!.simulateMessage({ type: "input_audio_buffer.speech_started" });
+    expect(client.getState().pendingCandidateAudio).toBe(true);
+
+    peerConnections[0].simulateConnectionState("failed");
+    client.connect(); // Retry
+    expect(client.getState().pendingCandidateAudio).toBe(false);
+  });
 });

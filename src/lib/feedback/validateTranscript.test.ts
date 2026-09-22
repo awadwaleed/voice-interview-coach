@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   InvalidTranscriptError,
   hasEvaluableContent,
+  hasMissingCandidateContent,
   validateTranscript,
 } from "@/src/lib/feedback/validateTranscript";
 import type { InterviewTurn } from "@/src/types/interview";
@@ -108,5 +109,37 @@ describe("hasEvaluableContent", () => {
 
   it("is false when candidate text is only whitespace", () => {
     expect(hasEvaluableContent([turn({ transcript: "   " })])).toBe(false);
+  });
+});
+
+describe("hasMissingCandidateContent", () => {
+  it("is true when a candidate turn failed transcription", () => {
+    expect(
+      hasMissingCandidateContent([turn({ status: "failed", transcript: "" })]),
+    ).toBe(true);
+  });
+
+  it("is true when a candidate turn is unavailable (connection lost)", () => {
+    expect(
+      hasMissingCandidateContent([turn({ status: "unavailable", transcript: "" })]),
+    ).toBe(true);
+  });
+
+  it("is false when all candidate turns are complete", () => {
+    expect(hasMissingCandidateContent([turn()])).toBe(false);
+  });
+
+  it("is false for an interviewer turn that failed/is unavailable", () => {
+    expect(
+      hasMissingCandidateContent([
+        turn({ speaker: "interviewer", status: "failed", transcript: "" }),
+      ]),
+    ).toBe(false);
+  });
+
+  it("is false for a merely pending candidate turn", () => {
+    expect(
+      hasMissingCandidateContent([turn({ status: "pending", transcript: "" })]),
+    ).toBe(false);
   });
 });

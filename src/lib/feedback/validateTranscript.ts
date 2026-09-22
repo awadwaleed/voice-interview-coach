@@ -90,3 +90,18 @@ export function hasEvaluableContent(transcript: InterviewTurn[]): boolean {
       turn.transcript.trim().length > 0,
   );
 }
+
+/**
+ * True when one or more candidate answers exist but couldn't be captured
+ * (failed transcription, or lost to a connection/timeout issue) — feedback
+ * generated from the remaining transcript is evaluating incomplete
+ * coverage, and both the evaluator prompt and the results UI should
+ * disclose that rather than silently presenting it as the whole interview.
+ */
+export function hasMissingCandidateContent(transcript: InterviewTurn[]): boolean {
+  return transcript.some(
+    (turn) =>
+      turn.speaker === "candidate" &&
+      (turn.status === "failed" || turn.status === "unavailable"),
+  );
+}

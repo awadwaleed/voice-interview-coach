@@ -3,7 +3,10 @@
 import { useEffect } from "react";
 import { PRIMARY_BUTTON_CLASS, SECONDARY_BUTTON_CLASS } from "@/src/components/buttonStyles";
 import { useInterviewFeedback } from "@/src/hooks/useInterviewFeedback";
-import { hasEvaluableContent } from "@/src/lib/feedback/validateTranscript";
+import {
+  hasEvaluableContent,
+  hasMissingCandidateContent,
+} from "@/src/lib/feedback/validateTranscript";
 import type { InterviewConfig, InterviewTurn } from "@/src/types/interview";
 
 interface InterviewFeedbackScreenProps {
@@ -29,6 +32,7 @@ export default function InterviewFeedbackScreen({
 }: InterviewFeedbackScreenProps) {
   const { status, feedback, error, analyze } = useInterviewFeedback();
   const evaluable = hasEvaluableContent(transcript);
+  const missingContent = hasMissingCandidateContent(transcript);
 
   useEffect(() => {
     if (!evaluable) return;
@@ -48,7 +52,14 @@ export default function InterviewFeedbackScreen({
       </p>
 
       <div className="mt-6 flex flex-col gap-6">
-        {!evaluable && (
+        {!evaluable && missingContent && (
+          <p className="text-sm text-foreground/60">
+            Your answer(s) couldn&apos;t be captured due to a technical
+            issue, so there isn&apos;t enough content to generate feedback.
+          </p>
+        )}
+
+        {!evaluable && !missingContent && (
           <p className="text-sm text-foreground/60">
             Not enough was said during the interview to generate feedback.
           </p>
@@ -73,6 +84,14 @@ export default function InterviewFeedbackScreen({
 
         {status === "success" && feedback && (
           <>
+            {missingContent && (
+              <p className="text-sm text-foreground/60">
+                Note: one or more of your answers couldn&apos;t be captured
+                due to a technical issue and aren&apos;t reflected in this
+                feedback.
+              </p>
+            )}
+
             <section>
               <h2 className="text-sm font-semibold text-foreground">
                 Overall score: {feedback.overallScore}/10

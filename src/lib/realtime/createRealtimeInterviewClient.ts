@@ -16,6 +16,16 @@ export interface RealtimeInterviewState {
   error: string | null;
   audioBlocked: boolean;
   transcript: InterviewTurn[];
+  /**
+   * True from the moment server-side VAD detects the candidate has started
+   * speaking until their conversation item actually appears in transcript.
+   * There's a gap between "the candidate stopped talking" and "the server
+   * committed that audio into a conversation item" (VAD waits out a silence
+   * threshold first) — during that gap, transcript has no placeholder for
+   * it at all, so checking transcript alone for "anything pending" isn't
+   * enough to know whether it's safe to end the interview yet.
+   */
+  pendingCandidateAudio: boolean;
 }
 
 export interface RealtimeInterviewClient {
@@ -38,6 +48,7 @@ const IDLE_STATE: RealtimeInterviewState = {
   error: null,
   audioBlocked: false,
   transcript: [],
+  pendingCandidateAudio: false,
 };
 
 /**
@@ -97,7 +108,13 @@ export function createRealtimeInterviewClient({
     // credential, fresh SDP negotiation) with no continuity from any prior
     // attempt, so carrying over old turns would misrepresent what the
     // model actually has context on.
-    setState({ status: "connecting", error: null, audioBlocked: false, transcript: [] });
+    setState({
+      status: "connecting",
+      error: null,
+      audioBlocked: false,
+      transcript: [],
+      pendingCandidateAudio: false,
+    });
 
     const controller = new AbortController();
     credentialFetchController = controller;
@@ -206,6 +223,18 @@ export function createRealtimeInterviewClient({
           applyTranscriptEvent({ type: "conversation.item.truncated", item_id: itemId });
         }
         return;
+      }
+      if (type === "input_audio_buffer.speech_started") {
+        setState({ pendingCandidateAudio: true });
+        return;
+      }
+      if (type === "conversation.item.added") {
+        const role = (event as { item?: { role?: unknown } }).item?.role;
+        if (role === "user" && state.pendingCandidateAudio) {
+          setState({ pendingCandidateAudio: false });
+        }
+        // Fall through — the generic reducer below still needs to create
+        // the actual transcript turn for this item.
       }
       applyTranscriptEvent(event);
     }

@@ -51,6 +51,14 @@ export function getEligibleAnswerTurnIds(
   );
 }
 
+function countMissingCandidateTurns(transcript: InterviewTurn[]): number {
+  return transcript.filter(
+    (turn) =>
+      turn.speaker === "candidate" &&
+      (turn.status === "failed" || turn.status === "unavailable"),
+  ).length;
+}
+
 function formatTranscript(transcript: InterviewTurn[]): string {
   return transcript
     .filter(isEvaluableTurn)
@@ -68,12 +76,19 @@ export function buildFeedbackPrompt(
   config: InterviewConfig,
   transcript: InterviewTurn[],
 ): string {
+  const missingCount = countMissingCandidateTurns(transcript);
+
   return [
     `The following is a transcript of a completed, ${DIFFICULTY_DESCRIPTIONS[config.difficulty]} ${TYPE_DESCRIPTIONS[config.type]} for a ${config.role} position.`,
     "Evaluate only the candidate's answers, based strictly on what appears in the transcript below. Be specific and constructive: back up every point with something the candidate actually said. Be honest about weaknesses while remaining encouraging.",
     'For each candidate answer that responds to a behavioral-style question, include starStructureNotes assessing its Situation/Task/Action/Result structure; omit starStructureNotes for answers to purely technical questions.',
     "A turn marked [cut short] means the interviewer's audio was interrupted — the candidate may not have heard all of it.",
     "Each candidate line below is tagged with its exact id, like [id: candidate_1]. For every answerFeedback entry, set turnId to exactly one of these tagged ids — never invent, alter, or reuse an id for more than one entry, and never reference an interviewer line.",
+    ...(missingCount > 0
+      ? [
+          `Note: ${missingCount} candidate response(s) could not be captured (technical issue, not the candidate's fault) and are NOT included below. Do not penalize the candidate for these. Briefly acknowledge in overallSummary that this evaluation is based on incomplete coverage of the interview.`,
+        ]
+      : []),
     "",
     "--- TRANSCRIPT START ---",
     formatTranscript(transcript),

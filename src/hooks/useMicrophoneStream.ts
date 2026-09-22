@@ -15,6 +15,15 @@ interface UseMicrophoneStreamResult {
   stream: MediaStream | null;
   start: () => Promise<void>;
   stop: () => void;
+  /**
+   * Halts hardware capture immediately (releases the OS mic indicator)
+   * WITHOUT resetting status/stream — the `stream` object reference is left
+   * untouched so a consumer keyed on its identity (e.g. useRealtimeInterview)
+   * isn't triggered to tear anything down. For callers that need capture to
+   * stop instantly while some other in-flight process still depends on the
+   * stream reference staying stable; call stop() afterward for full cleanup.
+   */
+  stopCapture: () => void;
 }
 
 function stopAllTracks(stream: MediaStream | null) {
@@ -94,5 +103,9 @@ export function useMicrophoneStream(): UseMicrophoneStreamResult {
     }
   }, []);
 
-  return { status, error, stream, start, stop };
+  const stopCapture = useCallback(() => {
+    stopAllTracks(streamRef.current);
+  }, []);
+
+  return { status, error, stream, start, stop, stopCapture };
 }
