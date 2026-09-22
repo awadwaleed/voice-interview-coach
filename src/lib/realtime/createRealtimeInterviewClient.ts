@@ -4,7 +4,10 @@ import type {
   InterviewTurn,
 } from "@/src/types/interview";
 import { createRealtimeCall } from "@/src/lib/realtime/createRealtimeCall";
-import { applyRealtimeEventToTranscript } from "@/src/lib/realtime/transcript";
+import {
+  applyRealtimeEventToTranscript,
+  markPendingTurnsUnavailable,
+} from "@/src/lib/realtime/transcript";
 
 const SESSION_ENDPOINT = "/api/realtime/session";
 
@@ -102,8 +105,21 @@ export function createRealtimeInterviewClient({
     function fail(message: string) {
       if (attemptId !== myAttempt) return;
       teardown();
-      setState({ status: "error", error: message });
+      // Any turn still "pending" can never receive its completion event
+      // from this (now-dead) attempt — leave it showing "…" forever
+      // otherwise.
+      setState({
+        status: "error",
+        error: message,
+        transcript: markPendingTurnsUnavailable(state.transcript),
+      });
     }
+
+    // response_id -> item_id, populated from response.output_item.added.
+    // output_audio_buffer.cleared (the automatic WebRTC interruption signal)
+    // only carries response_id, so this is needed to know which transcript
+    // turn to mark interrupted. Scoped per attempt like `call`/`controller`.
+    const responseItemIds = new Map<string, string>();
 
     let call: ReturnType<typeof createRealtimeCall>;
     try {
@@ -141,25 +157,57 @@ export function createRealtimeInterviewClient({
     }
     activeCall = call;
 
+    function applyTranscriptEvent(event: unknown) {
+      const nextTranscript = applyRealtimeEventToTranscript(
+        state.transcript,
+        event,
+      );
+      if (nextTranscript !== state.transcript) {
+        setState({ transcript: nextTranscript });
+      }
+    }
+
     function handleEvent(event: unknown, thisCall: typeof call) {
       const type = (event as { type?: unknown } | null)?.type;
       if (type === "session.created") {
         thisCall.sendEvent({ type: "response.create" });
         setState({ status: "active" });
-      } else if (type === "error") {
+        return;
+      }
+      if (type === "error") {
         const message =
           (event as { error?: { message?: string } }).error?.message ??
           "A realtime session error occurred.";
         fail(message);
-      } else {
-        const nextTranscript = applyRealtimeEventToTranscript(
-          state.transcript,
-          event,
-        );
-        if (nextTranscript !== state.transcript) {
-          setState({ transcript: nextTranscript });
-        }
+        return;
       }
+      if (type === "response.output_item.added") {
+        // Bookkeeping only — conversation.item.added (handled generically
+        // below) already creates the turn itself. This just remembers which
+        // response produced which item, for output_audio_buffer.cleared.
+        const responseId = (event as { response_id?: unknown }).response_id;
+        const itemId = (event as { item?: { id?: unknown } }).item?.id;
+        if (typeof responseId === "string" && typeof itemId === "string") {
+          responseItemIds.set(responseId, itemId);
+        }
+        return;
+      }
+      if (type === "output_audio_buffer.cleared") {
+        // The automatic WebRTC interruption signal: fires when the user
+        // barges in, whether or not text generation had already finished.
+        // It only carries response_id, so translate via the map above into
+        // the same "mark interrupted" path conversation.item.truncated uses.
+        const responseId = (event as { response_id?: unknown }).response_id;
+        const itemId =
+          typeof responseId === "string"
+            ? responseItemIds.get(responseId)
+            : undefined;
+        if (itemId) {
+          applyTranscriptEvent({ type: "conversation.item.truncated", item_id: itemId });
+        }
+        return;
+      }
+      applyTranscriptEvent(event);
     }
 
     (async () => {

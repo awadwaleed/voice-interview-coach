@@ -48,6 +48,11 @@ function TranscriptTurn({ turn }: { turn: InterviewTurn }) {
           Transcription failed
         </span>
       )}
+      {turn.status === "unavailable" && (
+        <span className="text-sm italic text-foreground/40">
+          Transcript unavailable — connection lost
+        </span>
+      )}
       {(turn.status === "complete" || turn.status === "interrupted") && (
         <span className="text-sm text-foreground">{turn.transcript}</span>
       )}

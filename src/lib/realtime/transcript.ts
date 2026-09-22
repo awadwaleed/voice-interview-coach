@@ -47,19 +47,50 @@ function insertOrdered(
   ];
 }
 
+// Once a turn reaches one of these, it's final: text generation/transcription
+// completing after the fact (e.g. a transcript arriving after we already
+// learned playback was cut short) must not resurrect it back to "complete".
+const TERMINAL_STATUSES: ReadonlySet<InterviewTurnStatus> = new Set([
+  "failed",
+  "interrupted",
+  "unavailable",
+]);
+
 function withTurn(
   transcript: InterviewTurn[],
   itemId: string,
   patch: Partial<InterviewTurn>,
+  options: { skipIfTerminal?: boolean } = {},
 ): InterviewTurn[] {
   let changed = false;
   const next = transcript.map((turn) => {
     if (turn.id !== itemId) return turn;
+    if (options.skipIfTerminal && TERMINAL_STATUSES.has(turn.status)) {
+      return turn;
+    }
     changed = true;
     return { ...turn, ...patch };
   });
   // Preserve reference equality when nothing matched, so callers can cheaply
   // skip a state update for an event referencing an unknown/stale item id.
+  return changed ? next : transcript;
+}
+
+/**
+ * When a connection attempt fails, any turn still "pending" can never
+ * receive its completion event from that (now-dead) attempt — leave it
+ * showing "…" forever otherwise. Completed/failed/interrupted turns are
+ * left untouched.
+ */
+export function markPendingTurnsUnavailable(
+  transcript: InterviewTurn[],
+): InterviewTurn[] {
+  let changed = false;
+  const next = transcript.map((turn) => {
+    if (turn.status !== "pending") return turn;
+    changed = true;
+    return { ...turn, status: "unavailable" as const };
+  });
   return changed ? next : transcript;
 }
 
@@ -100,13 +131,28 @@ export function applyRealtimeEventToTranscript(
       if (typeof itemId !== "string" || typeof text !== "string") {
         return transcript;
       }
-      return withTurn(transcript, itemId, { transcript: text, status: "complete" });
+      return withTurn(
+        transcript,
+        itemId,
+        { transcript: text, status: "complete" },
+        { skipIfTerminal: true },
+      );
     }
 
     case "conversation.item.input_audio_transcription.failed": {
       const itemId = event.item_id;
       if (typeof itemId !== "string") return transcript;
       return withTurn(transcript, itemId, { status: "failed" });
+    }
+
+    case "conversation.item.truncated": {
+      // The item's generated text finished, but playback of its audio was
+      // cut short (the candidate interrupted). Generation completion and
+      // playback completion are different — don't estimate which words
+      // were actually heard from a millisecond offset; just flag it.
+      const itemId = event.item_id;
+      if (typeof itemId !== "string") return transcript;
+      return withTurn(transcript, itemId, { status: "interrupted" });
     }
 
     case "response.done": {

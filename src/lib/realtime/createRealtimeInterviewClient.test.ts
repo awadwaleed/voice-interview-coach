@@ -589,4 +589,136 @@ describe("createRealtimeInterviewClient", () => {
     client.connect(); // Retry — a fresh attempt / fresh server-side conversation
     expect(client.getState().transcript).toEqual([]);
   });
+
+  it("marks an interviewer turn interrupted on output_audio_buffer.cleared, correlated via response.output_item.added", async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === "/api/realtime/session") return Promise.resolve(sessionFetchResponse());
+      return Promise.resolve(sdpFetchResponse());
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { stream } = makeMicStream();
+    const audioElement = makeAudioElement();
+
+    const client = createRealtimeInterviewClient({
+      config: CONFIG,
+      micStream: stream,
+      getAudioElement: () => audioElement as unknown as HTMLAudioElement,
+    });
+
+    client.connect();
+    await flush();
+    const dc = peerConnections[0].dataChannel!;
+    dc.simulateMessage({ type: "session.created" });
+
+    // response.output_item.added establishes the response_id -> item_id
+    // correlation before generation/transcription completes.
+    dc.simulateMessage({
+      type: "response.output_item.added",
+      response_id: "resp_1",
+      output_index: 0,
+      item: { id: "interviewer_1", role: "assistant", type: "message" },
+    });
+    dc.simulateMessage({
+      type: "conversation.item.added",
+      item: { id: "interviewer_1", role: "assistant", type: "message" },
+      previous_item_id: null,
+    });
+    dc.simulateMessage({
+      type: "response.output_audio_transcript.done",
+      item_id: "interviewer_1",
+      transcript: "Let's talk about your background and ex",
+    });
+    expect(client.getState().transcript[0].status).toBe("complete");
+
+    // The candidate barges in mid-playback — the automatic WebRTC
+    // interruption signal only carries response_id.
+    dc.simulateMessage({ type: "output_audio_buffer.cleared", response_id: "resp_1" });
+
+    expect(client.getState().transcript[0]).toMatchObject({
+      status: "interrupted",
+      transcript: "Let's talk about your background and ex",
+    });
+  });
+
+  it("ignores output_audio_buffer.cleared for an unrecognized response_id", async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === "/api/realtime/session") return Promise.resolve(sessionFetchResponse());
+      return Promise.resolve(sdpFetchResponse());
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { stream } = makeMicStream();
+    const audioElement = makeAudioElement();
+
+    const client = createRealtimeInterviewClient({
+      config: CONFIG,
+      micStream: stream,
+      getAudioElement: () => audioElement as unknown as HTMLAudioElement,
+    });
+
+    client.connect();
+    await flush();
+    const dc = peerConnections[0].dataChannel!;
+    dc.simulateMessage({ type: "session.created" });
+
+    expect(() =>
+      dc.simulateMessage({ type: "output_audio_buffer.cleared", response_id: "resp_unknown" }),
+    ).not.toThrow();
+    expect(client.getState().transcript).toEqual([]);
+  });
+
+  it("marks pending turns unavailable (not stuck on '…' forever) when the connection fails mid-transcription", async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === "/api/realtime/session") return Promise.resolve(sessionFetchResponse());
+      return Promise.resolve(sdpFetchResponse());
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { stream } = makeMicStream();
+    const audioElement = makeAudioElement();
+
+    const client = createRealtimeInterviewClient({
+      config: CONFIG,
+      micStream: stream,
+      getAudioElement: () => audioElement as unknown as HTMLAudioElement,
+    });
+
+    client.connect();
+    await flush();
+    const dc = peerConnections[0].dataChannel!;
+    dc.simulateMessage({ type: "session.created" });
+
+    // A candidate turn is created but its transcription never arrives —
+    // the connection dies first.
+    dc.simulateMessage({
+      type: "conversation.item.added",
+      item: { id: "candidate_1", role: "user", type: "message" },
+      previous_item_id: null,
+    });
+    // A completed interviewer turn should be left alone.
+    dc.simulateMessage({
+      type: "conversation.item.added",
+      item: { id: "interviewer_1", role: "assistant", type: "message" },
+      previous_item_id: "candidate_1",
+    });
+    dc.simulateMessage({
+      type: "response.output_audio_transcript.done",
+      item_id: "interviewer_1",
+      transcript: "Welcome to the interview.",
+    });
+    expect(client.getState().transcript.map((t) => t.status)).toEqual([
+      "pending",
+      "complete",
+    ]);
+
+    peerConnections[0].simulateConnectionState("failed");
+
+    expect(client.getState().status).toBe("error");
+    const transcript = client.getState().transcript;
+    expect(transcript.find((t) => t.id === "candidate_1")).toMatchObject({
+      status: "unavailable",
+    });
+    expect(transcript.find((t) => t.id === "interviewer_1")).toMatchObject({
+      status: "complete",
+      transcript: "Welcome to the interview.",
+    });
+  });
 });

@@ -19,7 +19,12 @@ export interface InterviewConfig {
   difficulty: InterviewDifficulty;
 }
 
-export type InterviewTurnStatus = "pending" | "complete" | "failed" | "interrupted";
+export type InterviewTurnStatus =
+  | "pending"
+  | "complete"
+  | "failed"
+  | "interrupted"
+  | "unavailable";
 
 export interface InterviewTurn {
   id: string;

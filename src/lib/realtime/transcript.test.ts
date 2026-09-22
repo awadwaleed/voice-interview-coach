@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { applyRealtimeEventToTranscript } from "@/src/lib/realtime/transcript";
+import {
+  applyRealtimeEventToTranscript,
+  markPendingTurnsUnavailable,
+} from "@/src/lib/realtime/transcript";
 import type { InterviewTurn } from "@/src/types/interview";
 
 function added(id: string, role: "user" | "assistant", previousItemId?: string | null) {
@@ -193,5 +196,89 @@ describe("applyRealtimeEventToTranscript", () => {
   it("ignores an item with an unrecognized role", () => {
     const result = applyRealtimeEventToTranscript([], added("a", "system" as "user"));
     expect(result).toEqual([]);
+  });
+
+  describe("playback interruption (conversation.item.truncated)", () => {
+    it("marks an item interrupted even though its text generation already completed", () => {
+      let transcript = applyRealtimeEventToTranscript([], added("a", "assistant"));
+      transcript = applyRealtimeEventToTranscript(
+        transcript,
+        outputTranscriptDone("a", "This is the full generated response text."),
+      );
+      expect(transcript[0].status).toBe("complete");
+
+      // Generation finished, but the candidate interrupted playback before
+      // hearing all of it.
+      transcript = applyRealtimeEventToTranscript(transcript, {
+        type: "conversation.item.truncated",
+        item_id: "a",
+      });
+
+      expect(transcript[0]).toMatchObject({
+        status: "interrupted",
+        // Full generated text is kept (never estimate a word-level cutoff
+        // from a millisecond offset) — the "cut short" flag communicates
+        // that not all of it was heard.
+        transcript: "This is the full generated response text.",
+      });
+    });
+
+    it("does not let a later transcript-completion event downgrade an interrupted turn back to complete", () => {
+      let transcript = applyRealtimeEventToTranscript([], added("a", "assistant"));
+      transcript = applyRealtimeEventToTranscript(transcript, {
+        type: "conversation.item.truncated",
+        item_id: "a",
+      });
+      expect(transcript[0].status).toBe("interrupted");
+
+      // A stray/duplicate completion event arriving after truncation must
+      // not resurrect "complete".
+      transcript = applyRealtimeEventToTranscript(
+        transcript,
+        outputTranscriptDone("a", "some text"),
+      );
+      expect(transcript[0].status).toBe("interrupted");
+    });
+
+    it("ignores a truncated event referencing an unknown item id", () => {
+      const transcript = applyRealtimeEventToTranscript([], added("a", "assistant"));
+      const result = applyRealtimeEventToTranscript(transcript, {
+        type: "conversation.item.truncated",
+        item_id: "does-not-exist",
+      });
+      expect(result).toBe(transcript);
+    });
+  });
+
+  describe("markPendingTurnsUnavailable", () => {
+    it("marks only pending turns unavailable, leaving completed/failed/interrupted turns untouched", () => {
+      let transcript: InterviewTurn[] = [];
+      transcript = applyRealtimeEventToTranscript(transcript, added("pending_1", "user"));
+      transcript = applyRealtimeEventToTranscript(transcript, added("done_1", "assistant"));
+      transcript = applyRealtimeEventToTranscript(
+        transcript,
+        outputTranscriptDone("done_1", "Welcome to the interview."),
+      );
+
+      const result = markPendingTurnsUnavailable(transcript);
+
+      expect(result.find((t) => t.id === "pending_1")).toMatchObject({
+        status: "unavailable",
+      });
+      expect(result.find((t) => t.id === "done_1")).toMatchObject({
+        status: "complete",
+        transcript: "Welcome to the interview.",
+      });
+    });
+
+    it("is a reference-stable no-op when there are no pending turns", () => {
+      let transcript = applyRealtimeEventToTranscript([], added("a", "assistant"));
+      transcript = applyRealtimeEventToTranscript(
+        transcript,
+        outputTranscriptDone("a", "text"),
+      );
+      const result = markPendingTurnsUnavailable(transcript);
+      expect(result).toBe(transcript);
+    });
   });
 });
