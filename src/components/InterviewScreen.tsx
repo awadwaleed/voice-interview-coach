@@ -7,7 +7,10 @@ import {
 } from "@/src/components/buttonStyles";
 import { useMicrophoneStream } from "@/src/hooks/useMicrophoneStream";
 import { useRealtimeInterview } from "@/src/hooks/useRealtimeInterview";
-import { markPendingTurnsUnavailable } from "@/src/lib/realtime/transcript";
+import {
+  finalizeTranscript,
+  shouldWaitBeforeEnding,
+} from "@/src/lib/realtime/finalization";
 import type { InterviewConfig, InterviewTurn } from "@/src/types/interview";
 
 interface InterviewScreenProps {
@@ -20,10 +23,23 @@ interface InterviewScreenProps {
  * that answer's conversation item already exists server-side (audio was
  * already committed) but its transcription may not have arrived yet. Ending
  * immediately would snapshot it as "pending" forever and silently drop it.
- * This is how long we keep the connection alive (mic/playback already
- * stopped) waiting for any already-in-flight transcription to complete.
+ * Once something is known to be outstanding (a pending transcript turn, or
+ * pendingCandidateAudio), this is how long we keep the connection alive
+ * waiting for it to resolve.
  */
 const FINALIZE_TIMEOUT_MS = 4000;
+
+/**
+ * There's no client-visible signal for "the candidate is mid-utterance and
+ * the server hasn't even told us input_audio_buffer.speech_started yet" —
+ * that notification itself has network latency. So even when nothing is
+ * currently known to be pending, a live connection gets this short grace
+ * period to let any very-recent signal (speech_started, item creation)
+ * arrive before we conclude there's genuinely nothing outstanding. If
+ * anything does arrive during this window, the wait escalates to the full
+ * FINALIZE_TIMEOUT_MS above.
+ */
+const DRAIN_TIMEOUT_MS = 1500;
 
 const TYPE_LABELS: Record<InterviewConfig["type"], string> = {
   behavioral: "Behavioral",
@@ -82,10 +98,17 @@ export default function InterviewScreen({
 
   const [isEnding, setIsEnding] = useState(false);
   const endDeadlineRef = useRef<number | null>(null);
+  const drainDeadlineRef = useRef<number | null>(null);
+  const wasConnectedRef = useRef(false);
   const finalizedRef = useRef(false);
 
   const handleEndClick = () => {
     if (isEnding) return;
+    // Captured now, not read later: only a connection that was actually
+    // live when the user ended gets a drain grace period below — if
+    // realtime was never connected, there's no VAD/no possibility of
+    // in-flight candidate audio to wait for at all.
+    wasConnectedRef.current = realtime.status === "active";
     // Stop hearing the interviewer, and halt microphone capture, right
     // away. stopCapture() (unlike stop()) releases the hardware/OS mic
     // indicator immediately without changing mic.stream's identity or
@@ -102,53 +125,45 @@ export default function InterviewScreen({
   useEffect(() => {
     if (!isEnding || finalizedRef.current) return;
 
+    const now = Date.now();
     if (endDeadlineRef.current === null) {
-      endDeadlineRef.current = Date.now() + FINALIZE_TIMEOUT_MS;
+      endDeadlineRef.current = now + FINALIZE_TIMEOUT_MS;
+    }
+    if (drainDeadlineRef.current === null) {
+      drainDeadlineRef.current = now + DRAIN_TIMEOUT_MS;
     }
 
     const finalize = () => {
       if (finalizedRef.current) return;
       finalizedRef.current = true;
-      let transcript = markPendingTurnsUnavailable(realtime.transcript);
-      if (realtime.pendingCandidateAudio) {
-        // The candidate's audio was detected but the timeout elapsed
-        // before the server ever created a conversation item for it —
-        // there's no real id/text to preserve, but a synthetic
-        // "unavailable" placeholder still surfaces it through the same
-        // disclosure path as any other missing answer, rather than it
-        // vanishing with no trace at all.
-        transcript = [
-          ...transcript,
-          {
-            id: `unrecorded-${Date.now()}`,
-            speaker: "candidate",
-            transcript: "",
-            timestamp: Date.now(),
-            status: "unavailable",
-          },
-        ];
-      }
+      const transcript = finalizeTranscript(realtime.transcript, {
+        pendingCandidateAudio: realtime.pendingCandidateAudio,
+      });
       realtime.disconnect();
       mic.stop();
       onEnd(transcript);
     };
 
-    // realtime.transcript only has a placeholder for audio that has
-    // already been committed into a conversation item. There's a gap
-    // between the candidate finishing speaking and the server actually
-    // creating that item (VAD waits out a silence threshold first) —
-    // pendingCandidateAudio covers that earlier window, so ending
-    // mid-utterance or just after doesn't silently drop it either.
-    const stillWaiting =
-      realtime.status !== "error" &&
-      (realtime.pendingCandidateAudio ||
-        realtime.transcript.some((turn) => turn.status === "pending"));
+    const knownPending =
+      realtime.pendingCandidateAudio ||
+      realtime.transcript.some((turn) => turn.status === "pending");
+    const stillWaiting = shouldWaitBeforeEnding({
+      status: realtime.status,
+      pendingCandidateAudio: realtime.pendingCandidateAudio,
+      transcript: realtime.transcript,
+      wasConnected: wasConnectedRef.current,
+      now,
+      drainDeadline: drainDeadlineRef.current,
+    });
     if (!stillWaiting) {
       finalize();
       return;
     }
 
-    const remaining = Math.max(0, endDeadlineRef.current - Date.now());
+    const deadline = knownPending
+      ? endDeadlineRef.current
+      : drainDeadlineRef.current;
+    const remaining = Math.max(0, deadline - Date.now());
     const timeoutId = setTimeout(finalize, remaining);
     return () => clearTimeout(timeoutId);
     // realtime/onEnd/audioRef are effectively stable for this screen's
