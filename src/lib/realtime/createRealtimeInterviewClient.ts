@@ -1,5 +1,10 @@
-import type { InterviewConfig, InterviewStatus } from "@/src/types/interview";
+import type {
+  InterviewConfig,
+  InterviewStatus,
+  InterviewTurn,
+} from "@/src/types/interview";
 import { createRealtimeCall } from "@/src/lib/realtime/createRealtimeCall";
+import { applyRealtimeEventToTranscript } from "@/src/lib/realtime/transcript";
 
 const SESSION_ENDPOINT = "/api/realtime/session";
 
@@ -7,6 +12,7 @@ export interface RealtimeInterviewState {
   status: InterviewStatus;
   error: string | null;
   audioBlocked: boolean;
+  transcript: InterviewTurn[];
 }
 
 export interface RealtimeInterviewClient {
@@ -28,6 +34,7 @@ const IDLE_STATE: RealtimeInterviewState = {
   status: "idle",
   error: null,
   audioBlocked: false,
+  transcript: [],
 };
 
 /**
@@ -83,7 +90,11 @@ export function createRealtimeInterviewClient({
 
     const myAttempt = ++attemptId;
     teardown(); // defensive: clear any stale call left over from a prior error path
-    setState({ status: "connecting", error: null, audioBlocked: false });
+    // A new attempt is a brand-new server-side conversation (fresh
+    // credential, fresh SDP negotiation) with no continuity from any prior
+    // attempt, so carrying over old turns would misrepresent what the
+    // model actually has context on.
+    setState({ status: "connecting", error: null, audioBlocked: false, transcript: [] });
 
     const controller = new AbortController();
     credentialFetchController = controller;
@@ -140,6 +151,14 @@ export function createRealtimeInterviewClient({
           (event as { error?: { message?: string } }).error?.message ??
           "A realtime session error occurred.";
         fail(message);
+      } else {
+        const nextTranscript = applyRealtimeEventToTranscript(
+          state.transcript,
+          event,
+        );
+        if (nextTranscript !== state.transcript) {
+          setState({ transcript: nextTranscript });
+        }
       }
     }
 

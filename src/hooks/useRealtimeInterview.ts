@@ -12,6 +12,7 @@ const IDLE_STATE: RealtimeInterviewState = {
   status: "idle",
   error: null,
   audioBlocked: false,
+  transcript: [],
 };
 
 /** A no-op stand-in used when there's no microphone stream to connect with. */

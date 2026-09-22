@@ -3,7 +3,7 @@
 import { useRef } from "react";
 import { useMicrophoneStream } from "@/src/hooks/useMicrophoneStream";
 import { useRealtimeInterview } from "@/src/hooks/useRealtimeInterview";
-import type { InterviewConfig } from "@/src/types/interview";
+import type { InterviewConfig, InterviewTurn } from "@/src/types/interview";
 
 interface InterviewScreenProps {
   config: InterviewConfig;
@@ -27,6 +27,33 @@ const PRIMARY_BUTTON_CLASS =
 
 const SECONDARY_BUTTON_CLASS =
   "w-full rounded-full border border-black/10 px-5 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-black/5 dark:border-white/15 dark:hover:bg-white/10";
+
+const SPEAKER_LABELS: Record<InterviewTurn["speaker"], string> = {
+  interviewer: "Interviewer",
+  candidate: "You",
+};
+
+function TranscriptTurn({ turn }: { turn: InterviewTurn }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-xs font-semibold text-foreground/60">
+        {SPEAKER_LABELS[turn.speaker]}
+        {turn.status === "interrupted" && " · cut short"}
+      </span>
+      {turn.status === "pending" && (
+        <span className="text-sm italic text-foreground/40">…</span>
+      )}
+      {turn.status === "failed" && (
+        <span className="text-sm italic text-foreground/40">
+          Transcription failed
+        </span>
+      )}
+      {(turn.status === "complete" || turn.status === "interrupted") && (
+        <span className="text-sm text-foreground">{turn.transcript}</span>
+      )}
+    </div>
+  );
+}
 
 export default function InterviewScreen({
   config,
@@ -121,6 +148,14 @@ export default function InterviewScreen({
             </p>
           )}
         </div>
+
+        {realtime.transcript.length > 0 && (
+          <div className="flex max-h-64 flex-col gap-3 overflow-y-auto rounded-lg border border-black/10 p-3 dark:border-white/15">
+            {realtime.transcript.map((turn) => (
+              <TranscriptTurn key={turn.id} turn={turn} />
+            ))}
+          </div>
+        )}
 
         {mic.status === "idle" && (
           <button type="button" onClick={mic.start} className={PRIMARY_BUTTON_CLASS}>

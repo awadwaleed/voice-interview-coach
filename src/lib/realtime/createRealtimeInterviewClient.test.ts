@@ -498,4 +498,95 @@ describe("createRealtimeInterviewClient", () => {
 
     expect(client.getState().audioBlocked).toBe(true);
   });
+
+  it("builds the transcript from data-channel events as the conversation progresses", async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === "/api/realtime/session") return Promise.resolve(sessionFetchResponse());
+      return Promise.resolve(sdpFetchResponse());
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { stream } = makeMicStream();
+    const audioElement = makeAudioElement();
+
+    const client = createRealtimeInterviewClient({
+      config: CONFIG,
+      micStream: stream,
+      getAudioElement: () => audioElement as unknown as HTMLAudioElement,
+    });
+
+    client.connect();
+    await flush();
+    const dc = peerConnections[0].dataChannel!;
+    dc.simulateMessage({ type: "session.created" });
+
+    dc.simulateMessage({
+      type: "conversation.item.added",
+      item: { id: "item_interviewer_1", role: "assistant", type: "message" },
+      previous_item_id: null,
+    });
+    dc.simulateMessage({
+      type: "response.output_audio_transcript.done",
+      item_id: "item_interviewer_1",
+      transcript: "Tell me about a challenging project.",
+    });
+    dc.simulateMessage({
+      type: "conversation.item.added",
+      item: { id: "item_candidate_1", role: "user", type: "message" },
+      previous_item_id: "item_interviewer_1",
+    });
+    dc.simulateMessage({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "item_candidate_1",
+      transcript: "Sure, let me walk you through it.",
+    });
+
+    const transcript = client.getState().transcript;
+    expect(transcript).toEqual([
+      expect.objectContaining({
+        id: "item_interviewer_1",
+        speaker: "interviewer",
+        transcript: "Tell me about a challenging project.",
+        status: "complete",
+      }),
+      expect.objectContaining({
+        id: "item_candidate_1",
+        speaker: "candidate",
+        transcript: "Sure, let me walk you through it.",
+        status: "complete",
+      }),
+    ]);
+  });
+
+  it("resets the transcript to empty when retrying connect() after a failure (fail() itself doesn't clear it)", async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === "/api/realtime/session") return Promise.resolve(sessionFetchResponse());
+      return Promise.resolve(sdpFetchResponse());
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { stream } = makeMicStream();
+    const audioElement = makeAudioElement();
+
+    const client = createRealtimeInterviewClient({
+      config: CONFIG,
+      micStream: stream,
+      getAudioElement: () => audioElement as unknown as HTMLAudioElement,
+    });
+
+    client.connect();
+    await flush();
+    peerConnections[0].dataChannel!.simulateMessage({
+      type: "conversation.item.added",
+      item: { id: "stale_item", role: "user", type: "message" },
+    });
+    expect(client.getState().transcript).toHaveLength(1);
+
+    // A connection failure (not an explicit disconnect()) — fail() itself
+    // doesn't clear the transcript, so this only works if connect() does.
+    peerConnections[0].simulateConnectionState("failed");
+    expect(client.getState().status).toBe("error");
+    expect(client.getState().transcript).toHaveLength(1); // still there right after failure
+
+    client.connect(); // Retry — a fresh attempt / fresh server-side conversation
+    expect(client.getState().transcript).toEqual([]);
+  });
 });
