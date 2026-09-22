@@ -1,13 +1,17 @@
 "use client";
 
 import { useRef } from "react";
+import {
+  PRIMARY_BUTTON_CLASS,
+  SECONDARY_BUTTON_CLASS,
+} from "@/src/components/buttonStyles";
 import { useMicrophoneStream } from "@/src/hooks/useMicrophoneStream";
 import { useRealtimeInterview } from "@/src/hooks/useRealtimeInterview";
 import type { InterviewConfig, InterviewTurn } from "@/src/types/interview";
 
 interface InterviewScreenProps {
   config: InterviewConfig;
-  onEnd: () => void;
+  onEnd: (transcript: InterviewTurn[]) => void;
 }
 
 const TYPE_LABELS: Record<InterviewConfig["type"], string> = {
@@ -21,12 +25,6 @@ const DIFFICULTY_LABELS: Record<InterviewConfig["difficulty"], string> = {
   intermediate: "Intermediate",
   advanced: "Advanced",
 };
-
-const PRIMARY_BUTTON_CLASS =
-  "w-full rounded-full bg-foreground px-5 py-2.5 text-sm font-medium text-background transition-colors disabled:cursor-not-allowed disabled:opacity-50";
-
-const SECONDARY_BUTTON_CLASS =
-  "w-full rounded-full border border-black/10 px-5 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-black/5 dark:border-white/15 dark:hover:bg-white/10";
 
 const SPEAKER_LABELS: Record<InterviewTurn["speaker"], string> = {
   interviewer: "Interviewer",
@@ -72,9 +70,10 @@ export default function InterviewScreen({
     realtime.status === "connecting" || realtime.status === "active";
 
   const handleEnd = () => {
+    const transcript = realtime.transcript;
     realtime.disconnect();
     mic.stop();
-    onEnd();
+    onEnd(transcript);
   };
 
   return (

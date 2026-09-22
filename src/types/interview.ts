@@ -47,12 +47,16 @@ export interface AnswerFeedback {
   turnId: string;
   strengths: string[];
   improvements: string[];
+  /** Only present for behavioral answers evaluated against STAR structure. */
+  starStructureNotes?: string;
 }
 
 export interface InterviewFeedback {
   overallScore: number;
+  overallSummary: string;
   strengths: string[];
   improvements: string[];
   communicationFeedback: string;
   answerFeedback: AnswerFeedback[];
+  suggestionsForNextPractice: string[];
 }
