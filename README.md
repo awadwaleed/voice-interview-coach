@@ -1,36 +1,62 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Voice Interview Coach
 
-## Getting Started
+A browser-based app that conducts realistic spoken mock interviews using the OpenAI Realtime API over WebRTC, then generates structured feedback after the interview ends.
 
-First, run the development server:
+See [docs/PRODUCT.md](docs/PRODUCT.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), and [docs/INTERVIEW_FLOW.md](docs/INTERVIEW_FLOW.md) for the product scope, architecture, and interview flow.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+## Prerequisites
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+- Node.js 20+
+- An [OpenAI API key](https://platform.openai.com/api-keys) from an account with:
+  - Access to the Realtime API (model `gpt-realtime`)
+  - Active billing / available credit — the Realtime API requires a paid account, and new/low-usage orgs may see low rate limits
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Setup
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. Install dependencies:
+
+   ```bash
+   npm install
+   ```
+
+2. Copy `.env.example` to `.env.local` and fill in your API key:
+
+   ```bash
+   cp .env.example .env.local
+   ```
+
+   ```
+   OPENAI_API_KEY=sk-...
+   ```
+
+   This key is read only on the server (`app/api/realtime/session`, `app/api/feedback`) and is never sent to the browser. `.env.local` is already covered by `.gitignore` — do not commit it or paste your key anywhere else.
+
+3. Run the dev server:
+
+   ```bash
+   npm run dev
+   ```
+
+4. Open [http://localhost:3000](http://localhost:3000), grant microphone access when prompted, configure an interview, and click **Connect** to start.
+
+## Testing your setup
+
+- **End-to-end**: run through the app in the browser — configure an interview, connect, speak a few answers, end the interview, and confirm feedback is generated.
+- **Automated checks**:
+
+  ```bash
+  npm test          # vitest unit/integration tests
+  npx tsc --noEmit   # type checking
+  npm run lint       # ESLint
+  npm run build      # production build
+  ```
+
+## Troubleshooting
+
+- **`Failed to obtain a realtime session (500)`**: `OPENAI_API_KEY` is missing or the dev server was started before it was set. Add/update it in `.env.local` and restart `npm run dev` (env vars are only read at server startup).
+- **`Realtime connection failed (429)`**: OpenAI rate-limited or rejected the WebRTC call directly (this happens browser-side, after your server already issued a valid short-lived credential). Check your [usage/rate limits](https://platform.openai.com/settings/organization/limits) and billing status, then retry.
+- **Microphone permission denied**: allow microphone access for `localhost:3000` in your browser's site settings and retry.
 
 ## Learn More
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+This project uses [Next.js](https://nextjs.org) (App Router), React, TypeScript, and Tailwind CSS. See the [Next.js documentation](https://nextjs.org/docs) for framework-level details.
