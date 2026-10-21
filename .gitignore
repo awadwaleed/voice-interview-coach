@@ -47,3 +47,7 @@ next-env.d.ts
 
 # graphify knowledge-graph output
 /graphify-out/
+
+# local review notes (not part of the app)
+/docs/ARCHITECTURE_GAMEPLAN.md
+/docs/CODEBASE_REVIEW.md
