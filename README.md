@@ -6,7 +6,7 @@ See [docs/PRODUCT.md](docs/PRODUCT.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE
 
 ## Prerequisites
 
-- Node.js 20+
+- Node.js 22.12+ or 24+ (see `.nvmrc`; Vitest 5 does not support Node 20)
 - An [OpenAI API key](https://platform.openai.com/api-keys) from an account with:
   - Access to the Realtime API (model `gpt-realtime`)
   - Active billing / available credit — the Realtime API requires a paid account, and new/low-usage orgs may see low rate limits
@@ -16,7 +16,7 @@ See [docs/PRODUCT.md](docs/PRODUCT.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE
 1. Install dependencies:
 
    ```bash
-   npm install
+   npm ci
    ```
 
 2. Copy `.env.example` to `.env.local` and fill in your API key:
@@ -45,8 +45,8 @@ See [docs/PRODUCT.md](docs/PRODUCT.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE
 - **Automated checks**:
 
   ```bash
-  npm test          # vitest unit/integration tests
-  npx tsc --noEmit   # type checking
+  npm test           # vitest unit/integration tests
+  npm run typecheck  # generate Next route types, then tsc --noEmit
   npm run lint       # ESLint
   npm run build      # production build
   ```
